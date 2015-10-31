@@ -283,6 +283,27 @@ static void plog(void *logctx, pageant_logfn_t logfn, const char *fmt, ...)
     }
 }
 
+static int confirm_key_usage(char* fingerprint, char* comment) {
+	const char* title = "Confirm SSH Key usage";
+	char* message = NULL;
+	int result = IDYES; // successful result is the default
+
+	if ((NULL != strstr(comment, "needs confirm")) ||
+		(NULL != strstr(comment, "need confirm")) ||
+		(NULL != strstr(comment, "confirmation"))) {
+		
+		message = dupprintf("Allow authentication with key with fingerprint\n%s\ncomment: %s", fingerprint, comment);
+		result = MessageBox(NULL, message, title, MB_ICONQUESTION | MB_YESNO);
+		sfree(message);
+	}
+
+	if (result != IDYES) {
+		return 0;
+	} else {
+		return 1;
+	}
+}
+
 void *pageant_handle_msg(const void *msg, int msglen, int *outlen,
                          void *logctx, pageant_logfn_t logfn)
 {
@@ -385,6 +406,7 @@ void *pageant_handle_msg(const void *msg, int msglen, int *outlen,
 	    unsigned char response_source[48], response_md5[16];
 	    struct MD5Context md5c;
 	    int i, len;
+		char fingerprint[100];
 
             plog(logctx, logfn, "request: SSH1_AGENTC_RSA_CHALLENGE");
 
@@ -446,6 +468,10 @@ void *pageant_handle_msg(const void *msg, int msglen, int *outlen,
                 fail_reason = "key not found";
 		goto failure;
 	    }
+		rsa_fingerprint(fingerprint, sizeof(fingerprint), key);
+		if (! confirm_key_usage(fingerprint, key->comment)) {
+	      goto failure;
+	    }
 	    response = rsadecrypt(challenge, key);
 	    for (i = 0; i < 32; i++)
 		response_source[i] = bignum_byte(response, 31 - i);
@@ -483,6 +509,7 @@ void *pageant_handle_msg(const void *msg, int msglen, int *outlen,
 	    const unsigned char *data;
             unsigned char *signature;
 	    int datalen, siglen, len;
+		char* confirm_fingerprint;
 
             plog(logctx, logfn, "request: SSH2_AGENTC_SIGN_REQUEST");
 
@@ -519,6 +546,12 @@ void *pageant_handle_msg(const void *msg, int msglen, int *outlen,
                 fail_reason = "key not found";
 		goto failure;
             }
+		confirm_fingerprint = ssh2_fingerprint_blob(b.blob, b.len);
+		if (! confirm_key_usage( confirm_fingerprint , key->comment)) {
+			sfree(confirm_fingerprint);
+			goto failure;
+	    }
+		sfree(confirm_fingerprint);
 	    signature = key->alg->sign(key->data, (const char *)data,
                                        datalen, &siglen);
 	    len = 5 + 4 + siglen;
